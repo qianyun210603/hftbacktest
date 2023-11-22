@@ -4,7 +4,7 @@ import pandas as pd
 from .assettype import Linear, Inverse
 from .reader import COL_EVENT, COL_EXCH_TIMESTAMP, COL_LOCAL_TIMESTAMP, COL_SIDE, COL_PRICE, COL_QTY, \
     DEPTH_EVENT, DEPTH_CLEAR_EVENT, DEPTH_SNAPSHOT_EVENT, TRADE_EVENT, DataReader, Cache
-from .order import BUY, SELL, NONE, NEW, EXPIRED, FILLED, CANCELED, GTC, GTX, Order, OrderBus
+from .order import BUY, SELL, NONE, NEW, EXPIRED, FILLED, CANCELED, GTC, GTX, Order, OrderBus, ATCLOSE
 from .backtest import SingleAssetHftBacktest
 from .data import validate_data, correct_local_timestamp, correct_exch_timestamp, correct
 from .proc.local import Local
@@ -20,7 +20,7 @@ __all__ = ('COL_EVENT', 'COL_EXCH_TIMESTAMP', 'COL_LOCAL_TIMESTAMP', 'COL_SIDE',
            'DEPTH_EVENT', 'TRADE_EVENT', 'DEPTH_CLEAR_EVENT', 'DEPTH_SNAPSHOT_EVENT',
            'BUY', 'SELL',
            'NONE', 'NEW', 'EXPIRED', 'FILLED', 'CANCELED',
-           'GTC', 'GTX',
+           'GTC', 'GTX', 'ATCLOSE',
            'Order', 'HftBacktest',
            'NoPartialFillExchange', 'PartialFillExchange',
            'ConstantLatency', 'FeedLatency', 'ForwardFeedLatency', 'BackwardFeedLatency', 'IntpOrderLatency',

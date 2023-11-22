@@ -8,7 +8,7 @@ import multiprocessing as mp
 from tqdm import tqdm
 
 
-EVENT_DF_COLS = ["event", "exch_timestamp", "local_timestamp", "side", "price", "amount"]
+EVENT_DF_COLS = ["event", "exch_timestamp", "local_timestamp", "side", "price", "qty"]
 
 
 class LobException(Exception):
@@ -50,7 +50,7 @@ def calculate_auction_fill(df, trade_df_price=np.nan):
             and orderbook_idx >= 0
             and orderbook_sell.iloc[idx]["price"] <= orderbook_buy.iloc[orderbook_idx]["price"]
         ):
-            this_fill_amount = min(orderbook_sell.iloc[idx, -1], orderbook_buy.iloc[orderbook_idx]["amount"])
+            this_fill_amount = min(orderbook_sell.iloc[idx, -1], orderbook_buy.iloc[orderbook_idx]["qty"])
             orderbook_sell.iloc[idx, -1] -= this_fill_amount
             orderbook_buy.iloc[orderbook_idx, -1] -= this_fill_amount
             fill_price = orderbook_buy.iloc[orderbook_idx]["price"]
@@ -73,9 +73,9 @@ def calculate_auction_fill(df, trade_df_price=np.nan):
     ):
         fill_price = (
             orderbook_buy.iloc[orderbook_idx].price
-            if orderbook_buy.iloc[orderbook_idx].amount < orderbook_sell.iloc[idx].amount
+            if orderbook_buy.iloc[orderbook_idx].qty < orderbook_sell.iloc[idx].qty
             else orderbook_sell.iloc[idx].price
-            if orderbook_buy.iloc[orderbook_idx].amount > orderbook_sell.iloc[idx].amount
+            if orderbook_buy.iloc[orderbook_idx].qty > orderbook_sell.iloc[idx].qty
             else (orderbook_sell.iloc[idx].price + orderbook_buy.iloc[orderbook_idx].price) / 2
         )
     if not (pd.isna(trade_df_price) or np.isclose(fill_price, trade_df_price)):
@@ -90,9 +90,9 @@ def parse_collection_auctions(collection_auction_order_df, trade_df_price=np.nan
         collection_auction_order_df[["委托代码", "委托价格", "委托数量"]]
         .groupby(["委托代码", "委托价格"], group_keys=False)
         .sum()
-        .rename(columns={"委托数量": "amount"})
+        .rename(columns={"委托数量": "qty"})
     )
-    auction_df = auction_df[auction_df["amount"] > 0].sort_index(ascending=[False, True])
+    auction_df = auction_df[auction_df["qty"] > 0].sort_index(ascending=[False, True])
     auction_df.index = auction_df.index.rename({"委托代码": "side", "委托价格": "price"})
     open_orderbook, filled_amount, fill_price = calculate_auction_fill(auction_df, trade_df_price)
     auction_end_timestamp = int(
@@ -124,18 +124,18 @@ def parse_continuous_auctions(open_orderbook, continuous_auction_order_df):
     for dt, row in continuous_auction_order_df.iterrows():
         timestamp = int(dt.timestamp() * 1000)
         if row["委托类型"] == "A":
-            while row["委托数量"] > 0 and row["委托价格"] * row["委托代码"] >= row["委托代码"] * orderbook.loc[-row["委托代码"]].index[0]:
+            while row["委托数量"] > 0 and -row["委托代码"] in orderbook.index and row["委托价格"] * row["委托代码"] >= row["委托代码"] * orderbook.loc[-row["委托代码"]].index[0]:
                 fill_price = orderbook.loc[-row["委托代码"]].index[0]
-                if row["委托数量"] >= orderbook.loc[(-row["委托代码"], fill_price), "amount"]:
-                    row["委托数量"] -= orderbook.loc[(-row["委托代码"], fill_price), "amount"]
+                if row["委托数量"] >= orderbook.loc[(-row["委托代码"], fill_price), "qty"]:
+                    row["委托数量"] -= orderbook.loc[(-row["委托代码"], fill_price), "qty"]
                     trade_events_c.append(
-                        [2, timestamp, -1, row["委托代码"], fill_price, orderbook.loc[(-row["委托代码"], fill_price), "amount"]]
+                        [2, timestamp, -1, row["委托代码"], fill_price, orderbook.loc[(-row["委托代码"], fill_price), "qty"]]
                     )
                     orderbook.drop((-row["委托代码"], fill_price), axis=0, inplace=True)
                     depth_events_c.append([1, timestamp, -1, -row["委托代码"], fill_price, 0])
                 else:
                     trade_events_c.append([2, timestamp, -1, row["委托代码"], fill_price, row["委托数量"]])
-                    orderbook.loc[(-row["委托代码"], fill_price), "amount"] -= row["委托数量"]
+                    orderbook.loc[(-row["委托代码"], fill_price), "qty"] -= row["委托数量"]
                     row["委托数量"] = 0
                     depth_events_c.append(
                         [
@@ -144,46 +144,50 @@ def parse_continuous_auctions(open_orderbook, continuous_auction_order_df):
                             -1,
                             -row["委托代码"],
                             fill_price,
-                            orderbook.loc[(-row["委托代码"], fill_price), "amount"],
+                            orderbook.loc[(-row["委托代码"], fill_price), "qty"],
                         ]
                     )
+
 
             if row["委托数量"] <= 0:
                 if row["委托数量"] < 0:
                     raise LobException(
-                        f"process order {row['交易所委托号']} gives negative amount of {row['代码']} at {dt.isoformat()}"
+                        f"process order {row['交易所委托号']} gives negative qty of {row['代码']} at {dt.isoformat()}"
                     )
                 continue
 
             if (row["委托代码"], row["委托价格"]) in orderbook.index:
-                orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"] += row["委托数量"]
+                orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"] += row["委托数量"]
                 depth_events_c.append(
-                    [1, timestamp, -1, row["委托代码"], row["委托价格"], orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"]]
+                    [1, timestamp, -1, row["委托代码"], row["委托价格"], orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"]]
                 )
             else:
-                position = (-row["委托代码"] * orderbook.loc[row["委托代码"]].index).searchsorted(-row["委托代码"] * row["委托价格"])
-                if row["委托代码"] == 1:
+                if row["委托代码"] in orderbook.index:
+                    position = (-row["委托代码"] * orderbook.loc[row["委托代码"]].index).searchsorted(-row["委托代码"] * row["委托价格"])
+                else:
+                    position = 0
+                if -1 in orderbook.index and row["委托代码"] == 1:
                     position += len(orderbook.loc[-1])
                 new_row = pd.DataFrame(
-                    [[row["委托数量"]]], index=pd.MultiIndex.from_tuples([(row["委托代码"], row["委托价格"])]), columns=["amount"]
+                    [[row["委托数量"]]], index=pd.MultiIndex.from_tuples([(row["委托代码"], row["委托价格"])]), columns=["qty"]
                 )
                 orderbook = pd.concat([orderbook.iloc[:position], new_row, orderbook.iloc[position:]])
                 depth_events_c.append(
-                    [1, timestamp, -1, row["委托代码"], row["委托价格"], orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"]]
+                    [1, timestamp, -1, row["委托代码"], row["委托价格"], orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"]]
                 )
         elif row["委托类型"] == "D":
             if (row["委托代码"], row["委托价格"]) in orderbook.index:
-                # if orderbook.loc[(row['委托代码'], row['委托价格']), 'amount'] >= row['委托数量']:
-                orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"] -= row["委托数量"]
-                if orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"] < 0:
+                # if orderbook.loc[(row['委托代码'], row['委托价格']), 'qty'] >= row['委托数量']:
+                orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"] -= row["委托数量"]
+                if orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"] < 0:
                     raise LobException(
-                        f"process order {row['交易所委托号']} gives negative amount of {row['代码']} at {dt.isoformat()}"
+                        f"process order {row['交易所委托号']} gives negative qty of {row['代码']} at {dt.isoformat()}"
                     )
-                    # orderbook.loc[(row['委托代码'], row['委托价格']), 'amount'] = 0
+                    # orderbook.loc[(row['委托代码'], row['委托价格']), 'qty'] = 0
                 depth_events_c.append(
-                    [1, timestamp, -1, row["委托代码"], row["委托价格"], orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"]]
+                    [1, timestamp, -1, row["委托代码"], row["委托价格"], orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"]]
                 )
-                if orderbook.loc[(row["委托代码"], row["委托价格"]), "amount"] == 0:
+                if orderbook.loc[(row["委托代码"], row["委托价格"]), "qty"] == 0:
                     orderbook.drop((row["委托代码"], row["委托价格"]), axis=0, inplace=True)
             else:
                 raise LobException(f"no order to cancel for {row['交易所委托号']} of {row['代码']} at {dt.isoformat()}")
@@ -196,9 +200,16 @@ def convert(input_quote_file_name, input_trade_file_name, depth_file_name, trade
     depth_file_name = Path(depth_file_name)
     trade_file_name = Path(trade_file_name)
     if not force_update and depth_file_name.exists() and trade_file_name.exists():
+        logger.info(f"Files {depth_file_name.name} and {trade_file_name.name} already exist, skip.")
         return
-    quote_df = pd.read_csv(input_quote_file_name, encoding="gbk", parse_dates=[["自然日", "时间"]])
-    trade_df = pd.read_csv(input_trade_file_name, encoding="gbk", parse_dates=[["自然日", "时间"]])
+    try:
+        quote_df = pd.read_csv(input_quote_file_name, encoding="gbk", parse_dates=[["自然日", "时间"]])
+    except:
+        quote_df = pd.read_csv(input_quote_file_name, encoding="utf-8", parse_dates=[["自然日", "时间"]])
+    try:
+        trade_df = pd.read_csv(input_trade_file_name, encoding="gbk", parse_dates=[["自然日", "时间"]], dtype={"成交代码": str})
+    except:
+        trade_df = pd.read_csv(input_trade_file_name, encoding="utf-8", parse_dates=[["自然日", "时间"]], dtype={"成交代码": str})
     quote_df["委托代码"] = quote_df["委托代码"].replace({"B": 1, "S": -1})
     if quote_df["代码"].iloc[0].endswith("SH"):
         collection_auction_df = quote_df[quote_df["自然日_时间"].dt.time < time(9, 26)].copy()
@@ -281,10 +292,12 @@ if __name__ == "__main__":
     quote_folder = base_folder / "quote"
     trade_folder = base_folder / "trade"
     converted_folder = base_folder / ".." / "converted_data"
+    if not converted_folder.exists():
+        converted_folder.mkdir(exist_ok=True)
     pool = mp.Pool(mp.cpu_count() - 8)
     quote_files = list(quote_folder.glob("*.csv"))
     pbar = tqdm(total=len(quote_files))
-    # quote_files = [quote_folder / "sh110043_20230301.csv"]
+    #quote_files = [quote_folder / "sz127037_20230322.csv"]
     mp_futures = []
 
     for quote_file in quote_files:
@@ -292,7 +305,7 @@ if __name__ == "__main__":
         trade_file = trade_folder / f"{base_name}.csv"
         if trade_file.exists():
             # print(f"Converting {base_name}...")
-            # convert(quote_file, trade_file, converted_folder / f"{base_name}.pkl", converted_folder / f"{base_name}_trades.pkl", force_update=True)
+            # convert(quote_file, trade_file, converted_folder / f"{base_name}.pkl", converted_folder / f"{base_name}_trades.pkl", force_update=False)
             # pbar.update(1)
             mp_futures.append(
                 pool.apply_async(

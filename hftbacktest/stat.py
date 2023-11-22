@@ -1,8 +1,10 @@
 from numba.experimental import jitclass
 from numba.typed import List
-from numba.types import ListType
+from numba.core.types import ListType
 from numba import float64, int64
 from matplotlib import pyplot as plt
+from mplfinance._utils import IntegerIndexDateTimeFormatter
+import matplotlib.dates as mdates
 import pandas as pd
 import numpy as np
 
@@ -140,7 +142,7 @@ class Stat:
         else:
             return equity[-1] * c * trading_days / denom
 
-    def summary(self, capital=None, resample='5min', trading_days=365):
+    def summary(self, capital=None, resample='5min', trading_days=365, trading_hours_per_day=24, return_result=False):
         dt_index = self.datetime()
         raw_equity = self.hbt.local.state.asset_type.equity(
             np.asarray(self.mid),
@@ -155,8 +157,8 @@ class Stat:
             0
         )
         equity = pd.Series(raw_equity, index=dt_index)
-        rs_equity_wo_fee = pd.Series(raw_equity_wo_fee, index=dt_index).resample(resample).last()
-        rs_equity = equity.resample(resample).last()
+        rs_equity_wo_fee = pd.Series(raw_equity_wo_fee, index=dt_index).resample(resample, label='right').last().dropna()
+        rs_equity = equity.resample(resample, label='right').last().dropna()
         rs_pnl = rs_equity.diff()
 
         c = (24 * 60 * 60 * 1e9) / (rs_pnl.index[1] - rs_pnl.index[0]).value
@@ -169,45 +171,77 @@ class Stat:
         drawdown = rs_equity - max_equity
         mdd = -drawdown.min()
 
-        ac = (24 * 60 * 60 * 1e9) / (equity.index[-1] - equity.index[0]).value
+        if trading_hours_per_day is not None:
+            ac = (trading_hours_per_day * 60 * 60 * 1e9) / (equity.index[-1] - equity.index[0]).value
+        else:
+            ac = 1/len(set(equity.index.date))
         ar = raw_equity[-1] * ac * trading_days
         rrr = ar / mdd
 
         dtn = pd.Series(self.trade_num, index=dt_index).diff().rolling('1d').sum().mean()
         dtq = pd.Series(self.trade_qty, index=dt_index).diff().rolling('1d').sum().mean()
         dta = pd.Series(self.trade_amount, index=dt_index).diff().rolling('1d').sum().mean()
+        mkt_value = np.asarray(self.position) * np.asarray(self.mid)
+        ret_result = None
+        if not return_result:
+            print('=========== Summary ===========')
+            print('Sharpe ratio: %.1f' % sr)
+            print('Sortino ratio: %.1f' % sortino)
+            print('Risk return ratio: %.1f' % rrr)
+            if capital is not None:
+                print('Period return: %.2f %%' % (raw_equity[-1] / capital * 100))
+                print('Annualised return: %.2f %%' % (ar / capital * 100))
+                print('Max. draw down: %.2f %%' % (mdd / capital * 100))
+            else:
+                print('Period return: %.2f %%' % raw_equity[-1])
+                print('Annualised return: %.2f' % ar)
+                print('Max. draw down: %.2f' % mdd)
+            print('The number of trades per day: %d' % dtn)
+            print('Avg. daily trading volume: %d' % dtq)
+            print('Avg. daily trading amount: %d' % dta)
 
-        print('=========== Summary ===========')
-        print('Sharpe ratio: %.1f' % sr)
-        print('Sortino ratio: %.1f' % sortino)
-        print('Risk return ratio: %.1f' % rrr)
-        if capital is not None:
-            print('Annualised return: %.2f %%' % (ar / capital * 100))
-            print('Max. draw down: %.2f %%' % (mdd / capital * 100))
+
+            if capital is not None:
+                print('Max leverage: %.2f' % (np.max(np.abs(mkt_value)) / capital))
+                print('Median leverage: %.2f' % (np.median(np.abs(mkt_value)) / capital))
         else:
-            print('Annualised return: %.2f' % ar)
-            print('Max. draw down: %.2f' % mdd)
-        print('The number of trades per day: %d' % dtn)
-        print('Avg. daily trading volume: %d' % dtq)
-        print('Avg. daily trading amount: %d' % dta)
+            ret_result = {
+                'Sharpe': sr,
+                'Sortino': sortino,
+                'Risk/return': rrr,
+                "Period return": raw_equity[-1] if capital is None else (raw_equity[-1] / capital),
+                'Annualised return': ar if capital is None else (ar / capital),
+                'Max D.D': mdd if capital is None else (mdd / capital),
+                'Avg. Trades per Day': dtn,
+                'Avg. Daily Vol.': dtq,
+                'Avg. Daily Amount': dta,
+            }
+            if capital is not None:
+                ret_result.update({
+                    "Max leverage": np.max(np.abs(mkt_value)) / capital,
+                    "Median leverage": np.median(np.abs(mkt_value)) / capital
+                })
 
-        position = np.asarray(self.position) * np.asarray(self.mid)
-        if capital is not None:
-            print('Max leverage: %.2f' % (np.max(np.abs(position)) / capital))
-            print('Median leverage: %.2f' % (np.median(np.abs(position)) / capital))
-
-        fig, axs = plt.subplots(2, 1, sharex=True)
+        fig, axs = plt.subplots(2, 1, sharex='all')
         fig.subplots_adjust(hspace=0)
         fig.set_size_inches(10, 6)
+
+        def plot_dt_series(ax, dt_series):
+            ax.plot(dt_series.values)
+            formatter = IntegerIndexDateTimeFormatter([mdates.date2num(d) for d in dt_series.index], "%m-%d\n%H:%M")
+            ax.xaxis.set_major_formatter(formatter)
 
         mid = pd.Series(self.mid, index=dt_index)
 
         if capital is not None:
-            ((mid / mid[0] - 1).resample(resample).last() * 100).plot(ax=axs[0], style='grey', alpha=0.5)
-            (rs_equity / capital * 100).plot(ax=axs[0])
-            (rs_equity_wo_fee / capital * 100).plot(ax=axs[0])
+            # ((mid / mid[0] - 1).resample(resample, label='right').last() * 100).plot(ax=axs[0], style='grey', alpha=0.5)
+            # (rs_equity / capital * 100).plot(ax=axs[0])
+            # (rs_equity_wo_fee / capital * 100).plot(ax=axs[0])
+            plot_dt_series(axs[0], ((mid / mid[0] - 1).resample(resample, label='right').last().dropna() * 100))
+            plot_dt_series(axs[0], (rs_equity / capital * 100).dropna())
+            plot_dt_series(axs[0], (rs_equity_wo_fee / capital * 100).dropna())
         else:
-            mid.resample(resample).last().plot(ax=axs[0], style='grey', alpha=0.5)
+            mid.resample(resample, label='right').last().plot(ax=axs[0], style='grey', alpha=0.5)
             (rs_equity * 100).plot(ax=axs[0])
             (rs_equity_wo_fee * 100).plot(ax=axs[0])
 
@@ -217,11 +251,15 @@ class Stat:
         axs[0].legend(['Trading asset', 'Strategy incl. fee', 'Strategy excl. fee'])
 
         # todo: this can mislead a user due to aggregation.
-        position = pd.Series(self.position, index=dt_index).resample(resample).last()
-        position.plot(ax=axs[1])
+        position = pd.Series(self.position, index=dt_index).resample(resample, label='right').last().dropna()
+        # position.plot(ax=axs[1])
+        plot_dt_series(axs[1], position)
         # ax3 = ax2.twinx()
         # (position * mid).plot(ax=ax3, style='grey', alpha=0.2)
         # axs[1].set_title('Position')
         axs[1].set_ylabel('Position (Qty)')
         # ax3.set_ylabel('Value')
         axs[1].grid()
+
+        if return_result:
+            return ret_result, fig

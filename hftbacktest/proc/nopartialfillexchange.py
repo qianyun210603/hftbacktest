@@ -1,11 +1,11 @@
 from numba import typeof, int64
 from numba.experimental import jitclass
 from numba.typed.typeddict import Dict
-from numba.types import DictType
+from numba.core.types import DictType
 
 from .proc import Proc, proc_spec
 from ..marketdepth import INVALID_MAX, INVALID_MIN
-from ..order import BUY, SELL, NEW, CANCELED, FILLED, EXPIRED, GTX, NONE, order_ladder_ty
+from ..order import BUY, SELL, NEW, CANCELED, FILLED, EXPIRED, GTX, NONE, order_ladder_ty, ATCLOSE, GTC
 from ..reader import COL_EVENT, COL_EXCH_TIMESTAMP, COL_SIDE, COL_PRICE, COL_QTY, DEPTH_CLEAR_EVENT, DEPTH_EVENT, \
     DEPTH_SNAPSHOT_EVENT, TRADE_EVENT
 
@@ -235,7 +235,7 @@ class NoPartialFillExchange_(Proc):
 
         if order.side == BUY:
             # Check if the buy order price is greater than or equal to the current best ask.
-            if order.price_tick >= self.depth.best_ask_tick:
+            if order.price_tick >= self.depth.best_ask_tick and order.time_in_force != ATCLOSE:
                 if order.time_in_force == GTX:
                     order.status = EXPIRED
                 else:
@@ -260,7 +260,7 @@ class NoPartialFillExchange_(Proc):
                 order.status = NEW
         else:
             # Check if the sell order price is less than or equal to the current best bid.
-            if order.price_tick <= self.depth.best_bid_tick:
+            if order.price_tick <= self.depth.best_bid_tick and order.time_in_force != ATCLOSE:
                 if order.time_in_force == GTX:
                     order.status = EXPIRED
                 else:
@@ -327,6 +327,10 @@ class NoPartialFillExchange_(Proc):
                 or order.status == FILLED:
             raise ValueError('status')
 
+        if order.time_in_force in {ATCLOSE}:
+            local_recv_timestamp = order.exch_timestamp + self.order_latency.response(timestamp, order, self)
+            return local_recv_timestamp
+
         order.maker = maker
         order.exec_price_tick = order.price_tick if maker else exec_price_tick
         order.exec_qty = order.leaves_qty
@@ -346,6 +350,20 @@ class NoPartialFillExchange_(Proc):
         self.state.apply_fill(order)
         self.orders_to.append(order.copy(), local_recv_timestamp)
         return local_recv_timestamp
+
+    def at_close(self, close_price_tick, current_timestamp):
+        for t in self.buy_orders.keys():
+            for order in list(self.buy_orders[t].values()):
+                if order.time_in_force == ATCLOSE and order.price_tick >= close_price_tick:
+                    # print('at_close', order.order_id, order.price_tick, close_price_tick)
+                    order.time_in_force = GTC
+                    self.__fill(order, current_timestamp, False, exec_price_tick=close_price_tick)
+        for t in self.sell_orders.keys():
+            for order in list(self.sell_orders[t].values()):
+                if order.time_in_force == ATCLOSE and order.price_tick <= close_price_tick:
+                    # print('at_close', order.order_id, order.price_tick, close_price_tick)
+                    order.time_in_force = GTC
+                    self.__fill(order, current_timestamp, False, exec_price_tick=close_price_tick)
 
 
 def NoPartialFillExchange(

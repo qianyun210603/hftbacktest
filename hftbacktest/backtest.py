@@ -125,6 +125,10 @@ class SingleAssetHftBacktest_:
     def local_timestamp(self):
         return self.current_timestamp
 
+    @property
+    def next_local_timestamp(self):
+        return self.local.next_timestamp()
+
     def submit_buy_order(self, order_id, price, qty, time_in_force, order_type=LIMIT, wait=False):
         self.local.submit_order(order_id, BUY, price, qty, order_type, time_in_force, self.current_timestamp)
 
@@ -257,6 +261,36 @@ class SingleAssetHftBacktest_:
         )
         self.current_timestamp = self.local.next_data[0, COL_LOCAL_TIMESTAMP]
         self.run = True
+
+    def at_close(self):
+        close_price_tick = round(self.last_trade[4] / self.tick_size)
+        # print(close_price_tick)
+        self.exch.at_close(close_price_tick, self.current_timestamp)
+        self.local.at_close()
+        #self.local.clear_inactive_orders()
+
+    def get_level_bid(self, level):
+        return self.local.depth.get_level_bid(level) * self.tick_size
+
+    def get_level_ask(self, level):
+        return self.local.depth.get_level_ask(level) * self.tick_size
+    def get_level_bid_qty(self, level):
+        return self.local.depth.get_level_bid_qty(level)
+
+    def get_level_ask_qty(self, level):
+        return self.local.depth.get_level_ask_qty(level)
+
+    def get_bid_upto_level(self, level):
+        return self.local.depth.get_bid_upto_level(level)
+
+    def get_ask_upto_level(self, level):
+        return self.local.depth.get_ask_upto_level(level)
+
+    def get_bid_value_upto_level(self, level):
+        return self.local.depth.get_bid_value_upto_level(level) * self.tick_size
+
+    def get_ask_value_upto_level(self, level):
+        return self.local.depth.get_ask_value_upto_level(level) * self.tick_size
 
 def SingleAssetHftBacktest(local, exch):
     jitted = jitclass(spec=[

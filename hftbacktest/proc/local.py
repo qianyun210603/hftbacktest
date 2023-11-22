@@ -3,7 +3,7 @@ from numba import int64, float64
 from numba.experimental import jitclass
 
 from .proc import Proc, proc_spec
-from ..order import BUY, SELL, NEW, CANCELED, FILLED, EXPIRED, NONE, Order, LIMIT
+from ..order import BUY, SELL, NEW, CANCELED, FILLED, EXPIRED, NONE, Order, LIMIT, DAY, PARTIALLY_FILLED
 from ..reader import COL_EVENT, COL_LOCAL_TIMESTAMP, COL_SIDE, COL_PRICE, COL_QTY, DEPTH_CLEAR_EVENT, DEPTH_EVENT, \
     DEPTH_SNAPSHOT_EVENT, TRADE_EVENT, USER_DEFINED_EVENT
 
@@ -144,6 +144,14 @@ class Local_(Proc):
 
     def get_user_data(self, event):
         return self.user_data[event - USER_DEFINED_EVENT]
+
+    def at_close(self):
+        # print("in local at_close")
+        for order in list(self.orders.values()):
+            if order.time_in_force == DAY and order.status in {NEW, PARTIALLY_FILLED}:
+                order.status = EXPIRED
+        self.depth.clear_depth(0, 0)
+        # self.clear_inactive_orders()
 
 
 def Local(

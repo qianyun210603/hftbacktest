@@ -5,7 +5,7 @@ import pandas as pd
 from numba import int64, float64, objmode
 from numba.experimental import jitclass
 from numba.typed import Dict, List
-from numba.types import DictType, ListType, unicode_type
+from numba.core.types import DictType, ListType, unicode_type
 
 COL_EVENT = 0
 COL_EXCH_TIMESTAMP = 1

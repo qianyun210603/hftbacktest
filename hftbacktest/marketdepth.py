@@ -3,7 +3,7 @@ import sys
 from numba import njit, float64, int64
 from numba.experimental import jitclass
 from numba.typed import Dict
-from numba.types import DictType
+from numba.core.types import DictType, ListType
 
 from .reader import COL_PRICE, COL_QTY, COL_SIDE
 from .order import BUY, SELL
@@ -163,3 +163,54 @@ class MarketDepth:
                     self.best_bid_tick = depth_below(self.bid_depth, self.best_ask_tick, self.low_bid_tick)
             if price_tick > self.high_ask_tick:
                 self.high_ask_tick = price_tick
+
+    def get_level_bid(self, level):
+        sorted_bid_ticks = sorted(self.bid_depth.keys(), reverse=True)
+        if level < len(sorted_bid_ticks):
+            return sorted_bid_ticks[level-1]
+        return INVALID_MIN
+
+    def get_level_ask(self, level):
+        sorted_ask_ticks = sorted(self.ask_depth.keys())
+        if level < len(sorted_ask_ticks):
+            return sorted_ask_ticks[level-1]
+        return INVALID_MAX
+    def get_level_bid_qty(self, level):
+        sorted_bid_ticks = sorted(self.bid_depth.keys(), reverse=True)
+        if level < len(sorted_bid_ticks):
+            return self.bid_depth[sorted_bid_ticks[level-1]]
+        return 0
+
+    def get_level_ask_qty(self, level):
+        sorted_ask_ticks = sorted(self.ask_depth.keys())
+        if level < len(sorted_ask_ticks):
+            return self.ask_depth[sorted_ask_ticks[level-1]]
+        return 0
+
+    def get_bid_upto_level(self, level):
+        sorted_bid_ticks = sorted(self.bid_depth.keys(), reverse=True)
+        total_qty = 0
+        for i in range(min(level, len(sorted_bid_ticks))):
+            total_qty += self.bid_depth[sorted_bid_ticks[i]]
+        return total_qty
+
+    def get_ask_upto_level(self, level):
+        sorted_ask_ticks = sorted(self.ask_depth.keys())
+        total_qty = 0
+        for i in range(min(level, len(sorted_ask_ticks))):
+            total_qty += self.ask_depth[sorted_ask_ticks[i]]
+        return total_qty
+
+    def get_bid_value_upto_level(self, level):
+        sorted_bid_ticks = sorted(self.bid_depth.keys(), reverse=True)
+        total_val = 0
+        for i in range(min(level, len(sorted_bid_ticks))):
+            total_val += self.bid_depth[sorted_bid_ticks[i]] * sorted_bid_ticks[i]
+        return total_val
+
+    def get_ask_value_upto_level(self, level):
+        sorted_ask_ticks = sorted(self.ask_depth.keys())
+        total_val = 0
+        for i in range(min(level, len(sorted_ask_ticks))):
+            total_val += self.ask_depth[sorted_ask_ticks[i]] * sorted_ask_ticks[i]
+        return total_val

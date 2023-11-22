@@ -2,7 +2,7 @@ import numpy as np
 from numba import float64, int64, int8, boolean
 from numba.experimental import jitclass
 from numba.typed import Dict, List
-from numba.types import DictType, ListType, Tuple
+from numba.core.types import DictType, ListType, Tuple
 
 
 BUY = 1
@@ -19,6 +19,8 @@ GTC = 0  # Good 'till cancel
 GTX = 1  # Post only
 FOK = 2  # Fill or kill
 IOC = 3  # Immediate or cancel
+DAY = 4  # Good 'till day
+ATCLOSE = 5  # At close
 
 LIMIT = 0
 MARKET = 1
